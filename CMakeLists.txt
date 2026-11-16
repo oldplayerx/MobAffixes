@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_GENERATOR_PLATFORM "Win32")
 
-# Скачиваем архив MinHook
+# Автоматически скачиваем и подключаем MinHook через его собственный CMake
 include(FetchContent)
 FetchContent_Declare(
     minhook
@@ -14,16 +14,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
-# Собираем нашу DLL, включая исходники MinHook напрямую в проект
+# Создаем нашу DLL
 add_library(MobAffixes SHARED
     dllmain.cpp
-    ${minhook_SOURCE_DIR}/src/buffer.c
-    ${minhook_SOURCE_DIR}/src/hde/hde32.c
-    ${minhook_SOURCE_DIR}/src/hde/hde64.c
-    ${minhook_SOURCE_DIR}/src/hook.c
 )
 
-# Указываем путь к заголовочным файлам MinHook
+# Линкуем с официальным таргетом minhook и подключаем заголовки
+target_link_libraries(MobAffixes PRIVATE minhook)
 target_include_directories(MobAffixes PRIVATE ${minhook_SOURCE_DIR}/include)
 
 set_target_properties(MobAffixes PROPERTIES
