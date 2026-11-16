@@ -18,7 +18,6 @@ ModConfig config = { 1, 15, 35, 60, 1, 2, 3 };
 char iniPath[MAX_PATH];
 char logPath[MAX_PATH];
 
-// Функция записи в лог-файл MobAffixes.log
 void WriteLog(const char* format, ...) {
     FILE* f = NULL;
     fopen_s(&f, logPath, "a");
@@ -30,6 +29,31 @@ void WriteLog(const char* format, ...) {
         va_end(args);
         fclose(f);
     }
+}
+
+// Функция поиска адреса по сигнатуре (Pattern Scanning) в памяти модуля
+LPVOID FindPattern(HMODULE hModule, const char* pattern, const char* mask) {
+    MODULEINFO moduleInfo;
+    GetModuleInformation(GetCurrentProcess(), hModule, &moduleInfo, sizeof(moduleInfo));
+    
+    DWORD base = (DWORD)hModule;
+    DWORD size = moduleInfo.SizeOfImage;
+    
+    DWORD patternLength = (DWORD)strlen(mask);
+    
+    for (DWORD i = 0; i < size - patternLength; i++) {
+        bool found = true;
+        for (DWORD j = 0; j < patternLength; j++) {
+            if (mask[j] != '?' && pattern[j] != *(char*)(base + i + j)) {
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            return (LPVOID)(base + i);
+        }
+    }
+    return NULL;
 }
 
 void LoadConfig() {
@@ -46,14 +70,12 @@ void LoadConfig() {
         *(lastSlash + 1) = '\0';
     }
     
-    // Формируем пути к .ini и .log в папке с DLL
     strcpy_s(logPath, iniPath);
     strcat_s(logPath, "MobAffixes.log");
     strcat_s(iniPath, "MobAffixes.ini");
 
     WriteLog("--- Init MobAffixes ---");
 
-    // Автоматическое создание файла конфигурации, если его нет
     std::ifstream testFile(iniPath);
     if (!testFile.is_open()) {
         std::ofstream outFile(iniPath);
@@ -86,7 +108,6 @@ void LoadConfig() {
         config.enabled, config.chanceNormal, config.chanceNightmare, config.chanceHell);
 }
 
-// Проверка шанса в зависимости от сложности игры
 bool RollAffixChance(int difficulty) {
     int chance = config.chanceNormal;
     if (difficulty == 1) chance = config.chanceNightmare;
@@ -104,7 +125,6 @@ int GetMaxAllowedAffixes(int difficulty) {
     return config.maxAffixesNormal;
 }
 
-// Получение текущей сложности из памяти D2Game.dll v1.10f
 int GetGameDifficulty() {
     HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
     if (!hD2Game) return 0;
@@ -117,11 +137,9 @@ int GetGameDifficulty() {
     return 0;
 }
 
-// Указатель на оригинальную функцию спавна монстра в D2Game.dll
 typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
 
-// Наш перехватчик (Detour) спавна монстров
 void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
     void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
 
@@ -138,7 +156,7 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
             if (pUnit) {
                 unsigned char* pMonsterData = (unsigned char*)pUnit[3];
                 if (pMonsterData) {
-                    pMonsterData[0] |= 0x02; // Флаг элитности
+                    pMonsterData[0] |= 0x02;
                     unsigned char* pAffixesArray = pMonsterData + 0x08;
                     
                     for (int i = 0; i < affixesCount; ++i) {
@@ -168,18 +186,20 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
         if (hD2Game) {
-            LPVOID pTarget = (LPVOID)((DWORD)hD2Game + 0x51E20);
+            // Ищем функцию по уникальным начальным байтам (сигнатуре) для v1.10f
+            // (Заменяем жесткое смещение на автоматический поиск в памяти)
+            LPVOID pTarget = FindPattern(hD2Game, "\x55\x8B\xEC\x83\xEC\x10", "xxxxxx");
 
-            MEMORY_BASIC_INFORMATION mbi;
-            if (VirtualQuery(pTarget, &mbi, sizeof(mbi)) && (mbi.State == MEM_COMMIT)) {
+            if (pTarget) {
+                WriteLog("Found SpawnMonster signature at address: 0x%X", (DWORD)pTarget);
                 if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
                     MH_EnableHook(pTarget);
-                    WriteLog("SpawnMonster hook installed successfully!");
+                    WriteLog("SpawnMonster hook installed successfully via signature!");
                 } else {
                     WriteLog("ERROR: Failed to create hook for SpawnMonster");
                 }
             } else {
-                WriteLog("ERROR: Target address memory is invalid");
+                WriteLog("ERROR: SpawnMonster signature not found in D2Game.dll");
             }
         }
     }
