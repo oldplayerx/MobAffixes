@@ -58,37 +58,30 @@ void LoadConfig() {
     config.maxAffixesHell = GetPrivateProfileIntA("MaxAffixes", "Hell", 3, iniPath);
 }
 
-// Указатель на оригинальную функцию печати текста в D2Client.dll (v1.10)
+// Указатель на оригинальную функцию печати текста
 typedef void(__fastcall* pfnPrintGameString)(wchar_t* wszText, int nColor);
 pfnPrintGameString OriginalPrintGameString = NULL;
 
-// Наша перехваченная функция (Detour), которая будет вызывать оригинал
+// Наш перехватчик (Detour)
 void __fastcall DetourPrintGameString(wchar_t* wszText, int nColor) {
     if (OriginalPrintGameString) {
         OriginalPrintGameString(wszText, nColor);
     }
 }
 
-// Функция безопасного вывода приветствия через хук
+// Безопасная функция вывода приветствия
 void ShowWelcomeMessage() {
     if (hasWelcomed || !OriginalPrintGameString) return;
 
     wchar_t message[256];
     wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully!");
-    OriginalPrintGameString(message, 0);
     
+    // Безопасный вызов оригинальной функции через трамплин MinHook
+    OriginalPrintGameString(message, 0);
     hasWelcomed = true;
 }
 
-// Заглушка хука на спавн мобов (здесь будет логика наложения аффиксов по шансам из ini)
-// В D2 v1.10 функции создания юнитов/монстров перехватываются аналогично через MinHook
-void HookedMonsterSpawn(/* аргументы функции спавна моба в движке */) {
-    // Получаем текущую сложность игры (Normal = 0, Nightmare = 1, Hell = 2)
-    // Сравниваем со значениями config.chanceNormal / Nightmare / Hell
-    // Генерируем случайные аффиксы в пределах config.maxAffixes...
-}
-
-// Поток инициализации и настройки хуков
+// Поток инициализации
 DWORD WINAPI MainThread(LPVOID lpParam) {
     // Ждем загрузку D2Client.dll
     while (!GetModuleHandleA("D2Client.dll")) {
@@ -97,23 +90,29 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
     LoadConfig();
 
-    // Инициализируем библиотеку MinHook и ставим хук на вывод текста
+    // Инициализируем MinHook и ставим хук с защитой от сбоев
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
         if (hD2Client) {
+            // Пробуем поставить хук на стандартное смещение v1.10
             LPVOID pTarget = (LPVOID)((DWORD)hD2Client + 0x6F8A0);
-            if (MH_CreateHook(pTarget, &DetourPrintGameString, reinterpret_cast<LPVOID*>(&OriginalPrintGameString)) == MH_OK) {
-                MH_EnableHook(pTarget);
+            
+            // Проверяем, читаема ли память по этому адресу, чтобы не вызвать ACCESS_VIOLATION
+            MEMORY_BASIC_INFORMATION mbi;
+            if (VirtualQuery(pTarget, &mbi, sizeof(mbi)) && (mbi.State == MEM_COMMIT) && (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+                if (MH_CreateHook(pTarget, &DetourPrintGameString, reinterpret_cast<LPVOID*>(&OriginalPrintGameString)) == MH_OK) {
+                    MH_EnableHook(pTarget);
+                }
             }
         }
     }
 
-    // Цикл проверки входа в игру для вывода приветствия
+    // Главный цикл проверки
     while (true) {
         Sleep(1000);
         if (!config.enabled) continue;
 
-        if (!hasWelcomed) {
+        if (!hasWelcomed && OriginalPrintGameString) {
             ShowWelcomeMessage();
         }
     }
