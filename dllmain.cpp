@@ -57,16 +57,28 @@ void LoadConfig() {
     config.maxAffixesHell = GetPrivateProfileIntA("MaxAffixes", "Hell", 3, iniPath);
 }
 
-// Функция вывода приветствия
+// Реальный вызов функции печати сообщения в D2Client.dll (v1.10)
+typedef void(__fastcall* f_D2Client_PrintGameString)(wchar_t* wszText, int nColor);
+
 void ShowWelcomeMessage() {
     if (hasWelcomed) return;
 
     HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
     if (hD2Client) {
-        // Здесь в следующем шаге мы подключим реальный вызов функции D2 для печати строки в чат/экран.
-        // Зеленый цвет в движке задается управляющим байтом "\xff\x63\x2" (где 2 — зеленый цвет предметов).
-        
-        hasWelcomed = true; // Фиксируем, что приветствие показано, чтобы оно больше не дублировалось
+        // Смещение функции печати строки в D2Client.dll версии 1.10
+        // (0x6F8A0 — стандартный адрес для ванильной 1.10)
+        DWORD printFuncAddr = (DWORD)hD2Client + 0x6F8A0;
+        f_D2Client_PrintGameString D2Client_PrintGameString = (f_D2Client_PrintGameString)printFuncAddr;
+
+        // Превращаем нашу строку в широкий формат (wchar_t)
+        // В кодировке D2 символ \xFF\x63\x32 включает зеленый цвет текста
+        wchar_t message[256];
+        wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully!");
+
+        // Вызываем функцию движка игры
+        D2Client_PrintGameString(message, 0);
+
+        hasWelcomed = true; // Больше не повторяем вывод
     }
 }
 
