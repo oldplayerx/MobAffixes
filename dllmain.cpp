@@ -58,11 +58,10 @@ void LoadConfig() {
     config.maxAffixesHell = GetPrivateProfileIntA("MaxAffixes", "Hell", 3, iniPath);
 }
 
-// Указатель на оригинальную функцию печати текста
+// Указатель на оригинальную функцию печати текста для v1.10f
 typedef void(__fastcall* pfnPrintGameString)(wchar_t* wszText, int nColor);
 pfnPrintGameString OriginalPrintGameString = NULL;
 
-// Наш перехватчик (Detour)
 void __fastcall DetourPrintGameString(wchar_t* wszText, int nColor) {
     if (OriginalPrintGameString) {
         OriginalPrintGameString(wszText, nColor);
@@ -73,33 +72,34 @@ void __fastcall DetourPrintGameString(wchar_t* wszText, int nColor) {
 void ShowWelcomeMessage() {
     if (hasWelcomed || !OriginalPrintGameString) return;
 
-    wchar_t message[256];
-    wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully!");
-    
-    // Безопасный вызов оригинальной функции через трамплин MinHook
-    OriginalPrintGameString(message, 0);
-    hasWelcomed = true;
+    HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
+    if (hD2Client) {
+        // Проверяем указатель на локального игрока в D2Client.dll (v1.10f смещение переменной игрока ~0x11BB2C или аналогичные)
+        // Если указатель не равен нулю, значит мы точно внутри игры, а не в меню
+        DWORD* pPlayer = (DWORD*)((DWORD)hD2Client + 0x11BB2C); // базовый указатель на структуру игрока в клиенте 1.10
+        if (pPlayer && *pPlayer != 0) {
+            wchar_t message[256];
+            wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully for v1.10f!");
+            OriginalPrintGameString(message, 0);
+            hasWelcomed = true;
+        }
+    }
 }
 
-// Поток инициализации
 DWORD WINAPI MainThread(LPVOID lpParam) {
-    // Ждем загрузку D2Client.dll
     while (!GetModuleHandleA("D2Client.dll")) {
         Sleep(100);
     }
 
     LoadConfig();
 
-    // Инициализируем MinHook и ставим хук с защитой от сбоев
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
         if (hD2Client) {
-            // Пробуем поставить хук на стандартное смещение v1.10
             LPVOID pTarget = (LPVOID)((DWORD)hD2Client + 0x6F8A0);
             
-            // Проверяем, читаема ли память по этому адресу, чтобы не вызвать ACCESS_VIOLATION
             MEMORY_BASIC_INFORMATION mbi;
-            if (VirtualQuery(pTarget, &mbi, sizeof(mbi)) && (mbi.State == MEM_COMMIT) && (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+            if (VirtualQuery(pTarget, &mbi, sizeof(mbi)) && (mbi.State == MEM_COMMIT)) {
                 if (MH_CreateHook(pTarget, &DetourPrintGameString, reinterpret_cast<LPVOID*>(&OriginalPrintGameString)) == MH_OK) {
                     MH_EnableHook(pTarget);
                 }
@@ -107,12 +107,12 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
         }
     }
 
-    // Главный цикл проверки
+    // Цикл ожидания входа в игровой мир
     while (true) {
-        Sleep(1000);
+        Sleep(2000); // Проверяем каждые 2 секунды, чтобы не грузить процессор
         if (!config.enabled) continue;
 
-        if (!hasWelcomed && OriginalPrintGameString) {
+        if (!hasWelcomed) {
             ShowWelcomeMessage();
         }
     }
