@@ -58,28 +58,37 @@ void LoadConfig() {
     config.maxAffixesHell = GetPrivateProfileIntA("MaxAffixes", "Hell", 3, iniPath);
 }
 
-// Тип оригинальной функции печати строки в D2Client.dll (v1.10)
+// Указатель на оригинальную функцию печати текста в D2Client.dll (v1.10)
 typedef void(__fastcall* pfnPrintGameString)(wchar_t* wszText, int nColor);
 pfnPrintGameString OriginalPrintGameString = NULL;
 
-// Наша безопасная функция вывода приветствия при входе в игровой мир
-void ShowWelcomeMessage() {
-    if (hasWelcomed) return;
-
-    HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
-    if (hD2Client) {
-        DWORD printFuncAddr = (DWORD)hD2Client + 0x6F8A0;
-        pfnPrintGameString printFunc = (pfnPrintGameString)printFuncAddr;
-
-        wchar_t message[256];
-        wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully!");
-        
-        printFunc(message, 0);
-        hasWelcomed = true;
+// Наша перехваченная функция (Detour), которая будет вызывать оригинал
+void __fastcall DetourPrintGameString(wchar_t* wszText, int nColor) {
+    if (OriginalPrintGameString) {
+        OriginalPrintGameString(wszText, nColor);
     }
 }
 
-// Поток инициализации
+// Функция безопасного вывода приветствия через хук
+void ShowWelcomeMessage() {
+    if (hasWelcomed || !OriginalPrintGameString) return;
+
+    wchar_t message[256];
+    wsprintfW(message, L"\xff\x63\x2[MobAffixes] Loaded successfully!");
+    OriginalPrintGameString(message, 0);
+    
+    hasWelcomed = true;
+}
+
+// Заглушка хука на спавн мобов (здесь будет логика наложения аффиксов по шансам из ini)
+// В D2 v1.10 функции создания юнитов/монстров перехватываются аналогично через MinHook
+void HookedMonsterSpawn(/* аргументы функции спавна моба в движке */) {
+    // Получаем текущую сложность игры (Normal = 0, Nightmare = 1, Hell = 2)
+    // Сравниваем со значениями config.chanceNormal / Nightmare / Hell
+    // Генерируем случайные аффиксы в пределах config.maxAffixes...
+}
+
+// Поток инициализации и настройки хуков
 DWORD WINAPI MainThread(LPVOID lpParam) {
     // Ждем загрузку D2Client.dll
     while (!GetModuleHandleA("D2Client.dll")) {
@@ -88,17 +97,22 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
     LoadConfig();
 
-    // Инициализируем библиотеку MinHook
+    // Инициализируем библиотеку MinHook и ставим хук на вывод текста
     if (MH_Initialize() == MH_OK) {
-        // Здесь в следующем шаге мы поставим хук на спавн монстров
+        HMODULE hD2Client = GetModuleHandleA("D2Client.dll");
+        if (hD2Client) {
+            LPVOID pTarget = (LPVOID)((DWORD)hD2Client + 0x6F8A0);
+            if (MH_CreateHook(pTarget, &DetourPrintGameString, reinterpret_cast<LPVOID*>(&OriginalPrintGameString)) == MH_OK) {
+                MH_EnableHook(pTarget);
+            }
+        }
     }
 
-    // Цикл проверки: ждем, пока игрок зайдет в саму игру (чтобы безопасно вывести приветствие)
+    // Цикл проверки входа в игру для вывода приветствия
     while (true) {
         Sleep(1000);
         if (!config.enabled) continue;
 
-        // Как только модуль полностью активен, пробуем показать приветствие
         if (!hasWelcomed) {
             ShowWelcomeMessage();
         }
@@ -115,6 +129,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         break;
 
     case DLL_PROCESS_DETACH:
+        MH_DisableHook(MH_ALL_HOOKS);
         MH_Uninitialize();
         break;
     }
