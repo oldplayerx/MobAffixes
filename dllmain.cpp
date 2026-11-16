@@ -118,7 +118,6 @@ bool RollAffixChance(int difficulty) {
 
     int roll = rand() % 100;
     bool success = roll < chance;
-    WriteLog("RollAffixChance: Diff=%d, Chance=%d, Roll=%d, Success=%s", difficulty, chance, roll, success ? "TRUE" : "FALSE");
     return success;
 }
 
@@ -140,58 +139,42 @@ int GetGameDifficulty() {
     return 0;
 }
 
-// Указатели на функции D2Game
-typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
-pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
+// Универсальный прототип создания юнита в D2Common.dll (UnitAny* AddUnit(...))
+typedef void* (__fastcall* pfnD2CommonAddUnit)(DWORD dwType, DWORD dwClassId, DWORD dwUniqueId, DWORD dwX, DWORD dwY, DWORD* pRoom, DWORD dwFlags, DWORD dwMode, DWORD dwServerFlag);
+pfnD2CommonAddUnit OriginalAddUnit = NULL;
 
-// Сигнатурный тип внутренней функции инициализации элитных модификаторов в D2Game.dll v1.10f
-typedef void(__fastcall* pfnApplyMonsterAffixes)(DWORD* pGame, DWORD* pUnit, int val1, int val2);
-pfnApplyMonsterAffixes D2GameApplyAffixes = NULL;
+void* __fastcall DetourD2CommonAddUnit(DWORD dwType, DWORD dwClassId, DWORD dwUniqueId, DWORD dwX, DWORD dwY, DWORD* pRoom, DWORD dwFlags, DWORD dwMode, DWORD dwServerFlag) {
+    // Сначала вызываем оригинал, чтобы юнит корректно создался в памяти
+    void* pUnit = OriginalAddUnit(dwType, dwClassId, dwUniqueId, dwX, dwY, pRoom, dwFlags, dwMode, dwServerFlag);
 
-void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
-    void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
-
-    if (pMonsterUnit && config.enabled) {
+    // dwType == 1 означает, что созданный объект — это монстр (UNIT_MONSTER)
+    if (pUnit && config.enabled && dwType == 1) {
         int difficulty = GetGameDifficulty();
-        WriteLog("Monster spawned! ID: %d, Difficulty: %d", MonsterId, difficulty);
+        WriteLog("Monster unit created! ClassID: %d, Difficulty: %d", dwClassId, difficulty);
 
         if (RollAffixChance(difficulty)) {
             int maxAffixes = GetMaxAllowedAffixes(difficulty);
             int affixesCount = (rand() % maxAffixes) + 1;
-            WriteLog("Applying %d affixes to monster ID %d", affixesCount, MonsterId);
+            WriteLog("Applying %d affixes to monster ClassID %d", affixesCount, dwClassId);
 
-            DWORD* pUnit = (DWORD*)pMonsterUnit;
-            if (pUnit) {
-                unsigned char* pMonsterData = (unsigned char*)pUnit[3];
+            DWORD* pUnitStruct = (DWORD*)pUnit;
+            if (pUnitStruct) {
+                unsigned char* pMonsterData = (unsigned char*)pUnitStruct[3];
                 if (pMonsterData) {
-                    // Устанавливаем флаг чемпиона/уника
-                    pMonsterData[0] |= 0x02; 
+                    pMonsterData[0] |= 0x02; // Флаг элитности
                     unsigned char* pAffixesArray = pMonsterData + 0x08;
                     
                     for (int i = 0; i < affixesCount; ++i) {
                         unsigned char affixId = (unsigned char)((rand() % 30) + 1);
                         pAffixesArray[i] = affixId;
-                        WriteLog("Assigned affix ID: %d to slot %d", affixId, i);
                     }
-
-                    // Получаем указатель на структуру игры для вызова функции движка
-                    HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
-                    if (hD2Game && D2GameApplyAffixes) {
-                        DWORD* pServerGame = *(DWORD**)((DWORD)hD2Game + 0x111350);
-                        if (pServerGame) {
-                            // Вызываем внутреннюю функцию движка для инициализации и применения статов аффиксов
-                            D2GameApplyAffixes(pServerGame, pUnit, affixesCount, 0);
-                            WriteLog("Called D2GameApplyAffixes successfully!");
-                        }
-                    }
-                } else {
-                    WriteLog("WARNING: pMonsterData is NULL for monster ID %d", MonsterId);
+                    WriteLog("Affixes successfully written to monster structure!");
                 }
             }
         }
     }
 
-    return pMonsterUnit;
+    return pUnit;
 }
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
@@ -204,25 +187,23 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     LoadConfig();
 
     if (MH_Initialize() == MH_OK) {
-        HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
-        if (hD2Game) {
-            LPVOID pTarget = FindPattern(hD2Game, "\x55\x8B\xEC\x83\xEC\x10", "xxxxxx");
+        HMODULE hD2Common = GetModuleHandleA("D2Common.dll");
+        if (hD2Common) {
+            // Сигнатура функции AddUnit в D2Common.dll для версии v1.10f
+            // Стандартный пролог функции создания юнитов
+            LPVOID pTarget = FindPattern(hD2Common, "\x55\x8B\xEC\x83\xEC\x14\x53\x56\x57", "xxxxxxxxx");
 
             if (pTarget) {
-                WriteLog("Found SpawnMonster signature at address: 0x%X", (DWORD)pTarget);
-                if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
+                WriteLog("Found AddUnit signature at address: 0x%X", (DWORD)pTarget);
+                if (MH_CreateHook(pTarget, &DetourD2CommonAddUnit, reinterpret_cast<LPVOID*>(&OriginalAddUnit)) == MH_OK) {
                     MH_EnableHook(pTarget);
-                    WriteLog("SpawnMonster hook installed successfully via signature!");
+                    WriteLog("AddUnit hook installed successfully in D2Common.dll!");
                 } else {
-                    WriteLog("ERROR: Failed to create hook for SpawnMonster");
+                    WriteLog("ERROR: Failed to create hook for AddUnit");
                 }
             } else {
-                WriteLog("ERROR: SpawnMonster signature not found in D2Game.dll");
+                WriteLog("ERROR: AddUnit signature not found in D2Common.dll");
             }
-
-            // Находим адрес функции применения аффиксов в D2Game.dll v1.10f (стандартный паттерн генератора элиток)
-            // Позже при необходимости уточним смещение, сейчас закладываем безопасный указатель
-            D2GameApplyAffixes = (pfnApplyMonsterAffixes)((DWORD)hD2Game + 0x524A0); 
         }
     }
 
