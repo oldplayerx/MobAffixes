@@ -14,8 +14,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Явно инициализируем среду MSVC для сборки под x86
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v133
+      with:
+        arch: x86
+
     - name: Configure CMake
-      run: cmake -B build -S . -G "Visual Studio 17 2022" -A Win32
+      run: cmake -B build -S . -A Win32
 
     - name: Build Project
       run: cmake --build build --config Release
