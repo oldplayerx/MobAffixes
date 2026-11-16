@@ -16,6 +16,21 @@ struct ModConfig {
 
 ModConfig config = { 1, 15, 35, 60, 1, 2, 3 };
 char iniPath[MAX_PATH];
+char logPath[MAX_PATH];
+
+// Функция записи в лог-файл MobAffixes.log
+void WriteLog(const char* format, ...) {
+    FILE* f = NULL;
+    fopen_s(&f, logPath, "a");
+    if (f) {
+        va_list args;
+        va_start(args, format);
+        vfprintf(f, format, args);
+        fprintf(f, "\n");
+        va_end(args);
+        fclose(f);
+    }
+}
 
 void LoadConfig() {
     HMODULE hModule = NULL;
@@ -30,7 +45,13 @@ void LoadConfig() {
     if (lastSlash) {
         *(lastSlash + 1) = '\0';
     }
+    
+    // Формируем пути к .ini и .log в папке с DLL
+    strcpy_s(logPath, iniPath);
+    strcat_s(logPath, "MobAffixes.log");
     strcat_s(iniPath, "MobAffixes.ini");
+
+    WriteLog("--- Init MobAffixes ---");
 
     // Автоматическое создание файла конфигурации, если его нет
     std::ifstream testFile(iniPath);
@@ -48,6 +69,7 @@ void LoadConfig() {
             outFile << "Nightmare = 2\n";
             outFile << "Hell = 3\n";
             outFile.close();
+            WriteLog("Created default MobAffixes.ini");
         }
     }
     testFile.close();
@@ -59,6 +81,9 @@ void LoadConfig() {
     config.maxAffixesNormal = GetPrivateProfileIntA("MaxAffixes", "Normal", 1, iniPath);
     config.maxAffixesNightmare = GetPrivateProfileIntA("MaxAffixes", "Nightmare", 2, iniPath);
     config.maxAffixesHell = GetPrivateProfileIntA("MaxAffixes", "Hell", 3, iniPath);
+
+    WriteLog("Config loaded: Enabled=%d, Normal=%d, Nightmare=%d, Hell=%d", 
+        config.enabled, config.chanceNormal, config.chanceNightmare, config.chanceHell);
 }
 
 // Проверка шанса в зависимости от сложности игры
@@ -67,7 +92,10 @@ bool RollAffixChance(int difficulty) {
     if (difficulty == 1) chance = config.chanceNightmare;
     else if (difficulty >= 2) chance = config.chanceHell;
 
-    return (rand() % 100) < chance;
+    int roll = rand() % 100;
+    bool success = roll < chance;
+    WriteLog("RollAffixChance: Diff=%d, Chance=%d, Roll=%d, Success=%s", difficulty, chance, roll, success ? "TRUE" : "FALSE");
+    return success;
 }
 
 int GetMaxAllowedAffixes(int difficulty) {
@@ -99,28 +127,27 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
 
     if (pMonsterUnit && config.enabled) {
         int difficulty = GetGameDifficulty();
+        WriteLog("Monster spawned! ID: %d, Difficulty: %d", MonsterId, difficulty);
 
         if (RollAffixChance(difficulty)) {
             int maxAffixes = GetMaxAllowedAffixes(difficulty);
             int affixesCount = (rand() % maxAffixes) + 1;
+            WriteLog("Applying %d affixes to monster ID %d", affixesCount, MonsterId);
 
             DWORD* pUnit = (DWORD*)pMonsterUnit;
             if (pUnit) {
-                // pUnit[3] в v1.10 указывает на структуру MonsterData внутри UnitAny
                 unsigned char* pMonsterData = (unsigned char*)pUnit[3];
                 if (pMonsterData) {
-                    // Устанавливаем флаг элитности (Champion / Unique), чтобы движок выделил слоты под аффиксы
-                    pMonsterData[0] |= 0x02; // Флаг уникального/элитного типа моба
-
-                    // Заполняем слоты аффиксов реальными ID из таблицы модификаторов D2 (от 1 до 35)
-                    // В памяти структуры MonsterData массив аффиксов начинается с определенных смещений
-                    unsigned char* pAffixesArray = pMonsterData + 0x08; // Смещение массива аффиксов для v1.10
+                    pMonsterData[0] |= 0x02; // Флаг элитности
+                    unsigned char* pAffixesArray = pMonsterData + 0x08;
                     
                     for (int i = 0; i < affixesCount; ++i) {
-                        // Генерируем случайный ванильный ID аффикса (например, Extra Strong = 1, Cursed = 3 и т.д.)
                         unsigned char affixId = (unsigned char)((rand() % 30) + 1);
                         pAffixesArray[i] = affixId;
+                        WriteLog("Assigned affix ID: %d to slot %d", affixId, i);
                     }
+                } else {
+                    WriteLog("WARNING: pMonsterData is NULL for monster ID %d", MonsterId);
                 }
             }
         }
@@ -147,7 +174,12 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
             if (VirtualQuery(pTarget, &mbi, sizeof(mbi)) && (mbi.State == MEM_COMMIT)) {
                 if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
                     MH_EnableHook(pTarget);
+                    WriteLog("SpawnMonster hook installed successfully!");
+                } else {
+                    WriteLog("ERROR: Failed to create hook for SpawnMonster");
                 }
+            } else {
+                WriteLog("ERROR: Target address memory is invalid");
             }
         }
     }
@@ -165,6 +197,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     case DLL_PROCESS_DETACH:
         MH_DisableHook(MH_ALL_HOOKS);
         MH_Uninitialize();
+        WriteLog("--- Detach MobAffixes ---");
         break;
     }
     return TRUE;
