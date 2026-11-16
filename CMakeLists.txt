@@ -19,8 +19,8 @@ add_library(MobAffixes SHARED
     dllmain.cpp
 )
 
-# Исправлено имя линкуемой цели с libminhook на minhook
-target_link_libraries(MobAffixes PRIVATE minhook)
+# Исправлено имя цели на libMinHook
+target_link_libraries(MobAffixes PRIVATE libMinHook)
 target_include_directories(MobAffixes PRIVATE ${minhook_SOURCE_DIR}/include)
 
 set_target_properties(MobAffixes PROPERTIES
