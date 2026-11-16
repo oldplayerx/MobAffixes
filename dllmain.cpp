@@ -31,16 +31,20 @@ void WriteLog(const char* format, ...) {
     }
 }
 
-// Функция поиска адреса по сигнатуре (Pattern Scanning) в памяти модуля
+// Поиск байт-паттерна в памяти модуля через PE-заголовки (без psapi)
 LPVOID FindPattern(HMODULE hModule, const char* pattern, const char* mask) {
-    MODULEINFO moduleInfo;
-    GetModuleInformation(GetCurrentProcess(), hModule, &moduleInfo, sizeof(moduleInfo));
-    
+    if (!hModule) return NULL;
+
     DWORD base = (DWORD)hModule;
-    DWORD size = moduleInfo.SizeOfImage;
-    
+    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)base;
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+
+    PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(base + dosHeader->e_lfanew);
+    if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return NULL;
+
+    DWORD size = ntHeaders->OptionalHeader.SizeOfImage;
     DWORD patternLength = (DWORD)strlen(mask);
-    
+
     for (DWORD i = 0; i < size - patternLength; i++) {
         bool found = true;
         for (DWORD j = 0; j < patternLength; j++) {
@@ -186,8 +190,6 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
         if (hD2Game) {
-            // Ищем функцию по уникальным начальным байтам (сигнатуре) для v1.10f
-            // (Заменяем жесткое смещение на автоматический поиск в памяти)
             LPVOID pTarget = FindPattern(hD2Game, "\x55\x8B\xEC\x83\xEC\x10", "xxxxxx");
 
             if (pTarget) {
