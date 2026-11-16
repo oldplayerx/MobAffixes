@@ -106,11 +106,20 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
 
             DWORD* pUnit = (DWORD*)pMonsterUnit;
             if (pUnit) {
+                // pUnit[3] в v1.10 указывает на структуру MonsterData внутри UnitAny
                 unsigned char* pMonsterData = (unsigned char*)pUnit[3];
                 if (pMonsterData) {
+                    // Устанавливаем флаг элитности (Champion / Unique), чтобы движок выделил слоты под аффиксы
+                    pMonsterData[0] |= 0x02; // Флаг уникального/элитного типа моба
+
+                    // Заполняем слоты аффиксов реальными ID из таблицы модификаторов D2 (от 1 до 35)
+                    // В памяти структуры MonsterData массив аффиксов начинается с определенных смещений
+                    unsigned char* pAffixesArray = pMonsterData + 0x08; // Смещение массива аффиксов для v1.10
+                    
                     for (int i = 0; i < affixesCount; ++i) {
-                        unsigned char randomAffixId = (rand() % 40) + 1; 
-                        // Здесь будет применение аффиксов в структуру моба
+                        // Генерируем случайный ванильный ID аффикса (например, Extra Strong = 1, Cursed = 3 и т.д.)
+                        unsigned char affixId = (unsigned char)((rand() % 30) + 1);
+                        pAffixesArray[i] = affixId;
                     }
                 }
             }
