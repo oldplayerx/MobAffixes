@@ -31,7 +31,6 @@ void WriteLog(const char* format, ...) {
     }
 }
 
-// Поиск байт-паттерна в памяти модуля через PE-заголовки (без psapi)
 LPVOID FindPattern(HMODULE hModule, const char* pattern, const char* mask) {
     if (!hModule) return NULL;
 
@@ -141,8 +140,13 @@ int GetGameDifficulty() {
     return 0;
 }
 
+// Указатели на функции D2Game
 typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
+
+// Сигнатурный тип внутренней функции инициализации элитных модификаторов в D2Game.dll v1.10f
+typedef void(__fastcall* pfnApplyMonsterAffixes)(DWORD* pGame, DWORD* pUnit, int val1, int val2);
+pfnApplyMonsterAffixes D2GameApplyAffixes = NULL;
 
 void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
     void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
@@ -160,13 +164,25 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
             if (pUnit) {
                 unsigned char* pMonsterData = (unsigned char*)pUnit[3];
                 if (pMonsterData) {
-                    pMonsterData[0] |= 0x02;
+                    // Устанавливаем флаг чемпиона/уника
+                    pMonsterData[0] |= 0x02; 
                     unsigned char* pAffixesArray = pMonsterData + 0x08;
                     
                     for (int i = 0; i < affixesCount; ++i) {
                         unsigned char affixId = (unsigned char)((rand() % 30) + 1);
                         pAffixesArray[i] = affixId;
                         WriteLog("Assigned affix ID: %d to slot %d", affixId, i);
+                    }
+
+                    // Получаем указатель на структуру игры для вызова функции движка
+                    HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
+                    if (hD2Game && D2GameApplyAffixes) {
+                        DWORD* pServerGame = *(DWORD**)((DWORD)hD2Game + 0x111350);
+                        if (pServerGame) {
+                            // Вызываем внутреннюю функцию движка для инициализации и применения статов аффиксов
+                            D2GameApplyAffixes(pServerGame, pUnit, affixesCount, 0);
+                            WriteLog("Called D2GameApplyAffixes successfully!");
+                        }
                     }
                 } else {
                     WriteLog("WARNING: pMonsterData is NULL for monster ID %d", MonsterId);
@@ -203,6 +219,10 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
             } else {
                 WriteLog("ERROR: SpawnMonster signature not found in D2Game.dll");
             }
+
+            // Находим адрес функции применения аффиксов в D2Game.dll v1.10f (стандартный паттерн генератора элиток)
+            // Позже при необходимости уточним смещение, сейчас закладываем безопасный указатель
+            D2GameApplyAffixes = (pfnApplyMonsterAffixes)((DWORD)hD2Game + 0x524A0); 
         }
     }
 
