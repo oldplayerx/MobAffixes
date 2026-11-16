@@ -110,7 +110,6 @@ int GetGameDifficulty() {
     return 0;
 }
 
-// Указатель на функцию спавна
 typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
 
@@ -158,16 +157,17 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
         if (hD2Game) {
-            // Используем проверенное базовое смещение функции спавна для D2Game.dll v1.10f с фиксом безопасности
+            // Безопасное вычисление адреса относительно реального базового адреса загруженной D2Game.dll
             LPVOID pTarget = (LPVOID)((DWORD)hD2Game + 0x51E20);
 
+            WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, (DWORD)pTarget);
+
             if (pTarget) {
-                WriteLog("Target address set to: 0x%X", (DWORD)pTarget);
                 if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
                     MH_EnableHook(pTarget);
-                    WriteLog("SpawnMonster hook installed successfully via direct offset!");
+                    WriteLog("SpawnMonster hook installed successfully!");
                 } else {
-                    WriteLog("ERROR: Failed to create hook for SpawnMonster at offset");
+                    WriteLog("ERROR: Failed to create hook for SpawnMonster");
                 }
             }
         }
