@@ -14,9 +14,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # Явно инициализируем среду MSVC для сборки под x86
     - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v133
+      uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x86
 
