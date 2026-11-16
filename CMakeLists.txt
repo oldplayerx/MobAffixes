@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_GENERATOR_PLATFORM "Win32")
 
-# Автоматически скачиваем и подключаем MinHook для безопасных хуков
+# Автоматически скачиваем и подключаем MinHook
 include(FetchContent)
 FetchContent_Declare(
     minhook
@@ -19,8 +19,9 @@ add_library(MobAffixes SHARED
     dllmain.cpp
 )
 
-# Подключаем библиотеку MinHook к нашему проекту
+# Подключаем библиотеку и указываем путь к её заголовочным файлам (include)
 target_link_libraries(MobAffixes PRIVATE libminhook)
+target_include_directories(MobAffixes PRIVATE ${minhook_SOURCE_DIR}/include)
 
 set_target_properties(MobAffixes PROPERTIES
     PREFIX ""
