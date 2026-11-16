@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
-project(MobAffixes CXX)
+project(MobAffixes C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_GENERATOR_PLATFORM "Win32")
 
-# Автоматически скачиваем и подключаем MinHook через его собственный CMake
+# Автоматически скачиваем и подключаем MinHook
 include(FetchContent)
 FetchContent_Declare(
     minhook
@@ -14,13 +14,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
-# Создаем нашу DLL
+# Создаем нашу DLL библиотеку
 add_library(MobAffixes SHARED
     dllmain.cpp
 )
 
-# Линкуем с официальным таргетом minhook и подключаем заголовки
-target_link_libraries(MobAffixes PRIVATE minhook)
+# Линкуем с правильным таргетом MinHook (с заглавными буквами)
+target_link_libraries(MobAffixes PRIVATE MinHook)
 target_include_directories(MobAffixes PRIVATE ${minhook_SOURCE_DIR}/include)
 
 set_target_properties(MobAffixes PROPERTIES
