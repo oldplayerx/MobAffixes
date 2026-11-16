@@ -14,16 +14,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
-# Создаем DLL и компилируем исходники MinHook напрямую внутрь нее
+# Создаем DLL и компилируем все необходимые файлы MinHook напрямую
 add_library(MobAffixes SHARED
     dllmain.cpp
     ${minhook_SOURCE_DIR}/src/buffer.c
+    ${minhook_SOURCE_DIR}/src/hook.c
+    ${minhook_SOURCE_DIR}/src/trampoline.c
     ${minhook_SOURCE_DIR}/src/hde/hde32.c
     ${minhook_SOURCE_DIR}/src/hde/hde64.c
-    ${minhook_SOURCE_DIR}/src/hook.c
 )
 
-# Указываем пути к заголовкам MinHook и внутренним папкам дезассемблера
+# Указываем пути к заголовкам MinHook
 target_include_directories(MobAffixes PRIVATE
     ${minhook_SOURCE_DIR}/include
     ${minhook_SOURCE_DIR}/src
