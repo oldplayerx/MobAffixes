@@ -2,6 +2,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <ctime>
+#include <MinHook.h>
 
 struct ModConfig {
     int enabled;
@@ -28,6 +29,35 @@ void WriteLog(const char* format, ...) {
         va_end(args);
         fclose(f);
     }
+}
+
+// Поиск сигнатуры в памяти модуля через PE-заголовки
+LPVOID FindPattern(HMODULE hModule, const char* pattern, const char* mask) {
+    if (!hModule) return NULL;
+
+    DWORD base = (DWORD)hModule;
+    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)base;
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+
+    PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(base + dosHeader->e_lfanew);
+    if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return NULL;
+
+    DWORD size = ntHeaders->OptionalHeader.SizeOfImage;
+    DWORD patternLength = (DWORD)strlen(mask);
+
+    for (DWORD i = 0; i < size - patternLength; i++) {
+        bool found = true;
+        for (DWORD j = 0; j < patternLength; j++) {
+            if (mask[j] != '?' && pattern[j] != *(char*)(base + i + j)) {
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            return (LPVOID)(base + i);
+        }
+    }
+    return NULL;
 }
 
 void LoadConfig() {
@@ -115,7 +145,6 @@ typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int Mon
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
 
 void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
-    // Теперь здесь безопасный вызов оригинала через наш трамплин без зацикливания
     void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
 
     if (pMonsterUnit && config.enabled) {
@@ -148,41 +177,6 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
     return pMonsterUnit;
 }
 
-// Создание безопасного трамплина для обхода падений
-bool InstallTrampolineHook(DWORD targetAddress, void* detourFunction, void** originalFunction) {
-    DWORD oldProtect;
-    if (!VirtualProtect((LPVOID)targetAddress, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        return false;
-    }
-
-    // Выделяем память под буфер трамплина
-    void* trampoline = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!trampoline) {
-        VirtualProtect((LPVOID)targetAddress, 5, oldProtect, &oldProtect);
-        return false;
-    }
-
-    // 1. Копируем первые 5 байт оригинальной функции в трамплин
-    memcpy(trampoline, (void*)targetAddress, 5);
-
-    // 2. Добавляем JMP из трамплина обратно в оригинальную функцию (на targetAddress + 5)
-    DWORD trampolineJmpLocation = (DWORD)trampoline + 5;
-    DWORD targetContinueAddress = targetAddress + 5;
-    *(unsigned char*)trampolineJmpLocation = 0xE9;
-    *(DWORD*)(trampolineJmpLocation + 1) = targetContinueAddress - (trampolineJmpLocation + 5);
-
-    // Сохраняем указатель на трамплин как оригинальную функцию
-    *originalFunction = trampoline;
-
-    // 3. Ставим JMP из оригинальной функции в наш перехватчик (detour)
-    DWORD relativeAddress = (DWORD)detourFunction - (targetAddress + 5);
-    *(unsigned char*)targetAddress = 0xE9;
-    *(DWORD*)(targetAddress + 1) = relativeAddress;
-
-    VirtualProtect((LPVOID)targetAddress, 5, oldProtect, &oldProtect);
-    return true;
-}
-
 DWORD WINAPI MainThread(LPVOID lpParam) {
     srand(static_cast<unsigned int>(time(NULL)));
 
@@ -192,15 +186,24 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
     LoadConfig();
 
-    HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
-    if (hD2Game) {
-        DWORD targetAddress = (DWORD)hD2Game + 0x51E20;
-        WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, targetAddress);
+    if (MH_Initialize() == MH_OK) {
+        HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
+        if (hD2Game) {
+            // Ищем функцию спавна в D2Game.dll по характерному прологу для v1.10f
+            LPVOID pTarget = FindPattern(hD2Game, "\x55\x8B\xEC\x83\xEC\x20\x53\x56\x57", "xxxxxxxxx");
 
-        if (InstallTrampolineHook(targetAddress, &DetourD2GameSpawnMonster, (void**)&OriginalSpawnMonster)) {
-            WriteLog("Trampoline hook installed successfully!");
-        } else {
-            WriteLog("ERROR: Failed to install trampoline hook");
+            if (pTarget) {
+                WriteLog("Found SpawnMonster signature at: 0x%X", (DWORD)pTarget);
+                MH_STATUS status = MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster));
+                if (status == MH_OK) {
+                    MH_EnableHook(pTarget);
+                    WriteLog("SpawnMonster hook installed successfully via MinHook!");
+                } else {
+                    WriteLog("ERROR: MH_CreateHook failed with status code: %d", status);
+                }
+            } else {
+                WriteLog("ERROR: SpawnMonster signature not found");
+            }
         }
     }
 
@@ -215,6 +218,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         break;
 
     case DLL_PROCESS_DETACH:
+        MH_DisableHook(MH_ALL_HOOKS);
+        MH_Uninitialize();
         WriteLog("--- Detach MobAffixes ---");
         break;
     }
