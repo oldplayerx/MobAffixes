@@ -2,7 +2,6 @@
 #include <fstream>
 #include <cstdlib>
 #include <ctime>
-#include <MinHook.h>
 
 struct ModConfig {
     int enabled;
@@ -89,7 +88,9 @@ bool RollAffixChance(int difficulty) {
     else if (difficulty >= 2) chance = config.chanceHell;
 
     int roll = rand() % 100;
-    return roll < chance;
+    bool success = roll < chance;
+    WriteLog("RollAffixChance: Diff=%d, Chance=%d, Roll=%d, Success=%s", difficulty, chance, roll, success ? "TRUE" : "FALSE");
+    return success;
 }
 
 int GetMaxAllowedAffixes(int difficulty) {
@@ -110,9 +111,11 @@ int GetGameDifficulty() {
     return 0;
 }
 
+// Указатель на оригинальную функцию
 typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
 
+// Наш перехватчик
 void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
     void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
 
@@ -135,6 +138,7 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
                     for (int i = 0; i < affixesCount; ++i) {
                         unsigned char affixId = (unsigned char)((rand() % 30) + 1);
                         pAffixesArray[i] = affixId;
+                        WriteLog("Assigned affix ID: %d to slot %d", affixId, i);
                     }
                     WriteLog("Affixes applied successfully!");
                 }
@@ -143,6 +147,27 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
     }
 
     return pMonsterUnit;
+}
+
+// Функция ручной установки JMP-хука без использования MinHook
+bool InstallInlineHook(DWORD targetAddress, void* detourFunction, void** originalFunction) {
+    DWORD oldProtect;
+    if (!VirtualProtect((LPVOID)targetAddress, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        return false;
+    }
+
+    // Сохраняем указатель на оригинал (начиная со смещения +5, так как 5 байт уйдут под инструкцию прыжка)
+    *originalFunction = (void*)targetAddress;
+
+    // Вычисляем относительный смещение для инструкции JMP (E3)
+    DWORD relativeAddress = (DWORD)detourFunction - (targetAddress + 5);
+
+    // Записываем байты инструкции JMP (0xE9) и относительный адрес
+    *(unsigned char*)targetAddress = 0xE9;
+    *(DWORD*)(targetAddress + 1) = relativeAddress;
+
+    VirtualProtect((LPVOID)targetAddress, 5, oldProtect, &oldProtect);
+    return true;
 }
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
@@ -154,30 +179,16 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
     LoadConfig();
 
-    if (MH_Initialize() == MH_OK) {
-        HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
-        if (hD2Game) {
-            LPVOID pTarget = (LPVOID)((DWORD)hD2Game + 0x51E20);
-            WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, (DWORD)pTarget);
+    HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
+    if (hD2Game) {
+        DWORD targetAddress = (DWORD)hD2Game + 0x51E20;
+        WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, targetAddress);
 
-            if (pTarget) {
-                DWORD oldProtect;
-                if (VirtualProtect(pTarget, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                    // Сохраняем статус ошибки MinHook в переменную
-                    MH_STATUS status = MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster));
-                    
-                    if (status == MH_OK) {
-                        MH_EnableHook(pTarget);
-                        WriteLog("SpawnMonster hook installed successfully!");
-                    } else {
-                        // Логируем точный код ошибки MinHook (например: 1, 2, 3 и т.д.)
-                        WriteLog("ERROR: MH_CreateHook failed with status code: %d", status);
-                    }
-                    VirtualProtect(pTarget, 5, oldProtect, &oldProtect);
-                } else {
-                    WriteLog("ERROR: Failed to change memory protection at target address");
-                }
-            }
+        // Устанавливаем прямой хук
+        if (InstallInlineHook(targetAddress, &DetourD2GameSpawnMonster, (void**)&OriginalSpawnMonster)) {
+            WriteLog("Inline hook installed successfully!");
+        } else {
+            WriteLog("ERROR: Failed to install inline hook");
         }
     }
 
@@ -192,8 +203,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         break;
 
     case DLL_PROCESS_DETACH:
-        MH_DisableHook(MH_ALL_HOOKS);
-        MH_Uninitialize();
         WriteLog("--- Detach MobAffixes ---");
         break;
     }
