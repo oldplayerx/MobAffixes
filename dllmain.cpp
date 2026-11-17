@@ -111,12 +111,11 @@ int GetGameDifficulty() {
     return 0;
 }
 
-// Указатель на оригинальную функцию
 typedef void* (__fastcall* pfnD2GameSpawnMonster)(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7);
 pfnD2GameSpawnMonster OriginalSpawnMonster = NULL;
 
-// Наш перехватчик
 void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, int X, int Y, int a5, int a6, int a7) {
+    // Теперь здесь безопасный вызов оригинала через наш трамплин без зацикливания
     void* pMonsterUnit = OriginalSpawnMonster(RoomCoordStruct, MonsterId, X, Y, a5, a6, a7);
 
     if (pMonsterUnit && config.enabled) {
@@ -149,20 +148,34 @@ void* __fastcall DetourD2GameSpawnMonster(DWORD RoomCoordStruct, int MonsterId, 
     return pMonsterUnit;
 }
 
-// Функция ручной установки JMP-хука без использования MinHook
-bool InstallInlineHook(DWORD targetAddress, void* detourFunction, void** originalFunction) {
+// Создание безопасного трамплина для обхода падений
+bool InstallTrampolineHook(DWORD targetAddress, void* detourFunction, void** originalFunction) {
     DWORD oldProtect;
     if (!VirtualProtect((LPVOID)targetAddress, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
         return false;
     }
 
-    // Сохраняем указатель на оригинал (начиная со смещения +5, так как 5 байт уйдут под инструкцию прыжка)
-    *originalFunction = (void*)targetAddress;
+    // Выделяем память под буфер трамплина
+    void* trampoline = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!trampoline) {
+        VirtualProtect((LPVOID)targetAddress, 5, oldProtect, &oldProtect);
+        return false;
+    }
 
-    // Вычисляем относительный смещение для инструкции JMP (E3)
+    // 1. Копируем первые 5 байт оригинальной функции в трамплин
+    memcpy(trampoline, (void*)targetAddress, 5);
+
+    // 2. Добавляем JMP из трамплина обратно в оригинальную функцию (на targetAddress + 5)
+    DWORD trampolineJmpLocation = (DWORD)trampoline + 5;
+    DWORD targetContinueAddress = targetAddress + 5;
+    *(unsigned char*)trampolineJmpLocation = 0xE9;
+    *(DWORD*)(trampolineJmpLocation + 1) = targetContinueAddress - (trampolineJmpLocation + 5);
+
+    // Сохраняем указатель на трамплин как оригинальную функцию
+    *originalFunction = trampoline;
+
+    // 3. Ставим JMP из оригинальной функции в наш перехватчик (detour)
     DWORD relativeAddress = (DWORD)detourFunction - (targetAddress + 5);
-
-    // Записываем байты инструкции JMP (0xE9) и относительный адрес
     *(unsigned char*)targetAddress = 0xE9;
     *(DWORD*)(targetAddress + 1) = relativeAddress;
 
@@ -184,11 +197,10 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
         DWORD targetAddress = (DWORD)hD2Game + 0x51E20;
         WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, targetAddress);
 
-        // Устанавливаем прямой хук
-        if (InstallInlineHook(targetAddress, &DetourD2GameSpawnMonster, (void**)&OriginalSpawnMonster)) {
-            WriteLog("Inline hook installed successfully!");
+        if (InstallTrampolineHook(targetAddress, &DetourD2GameSpawnMonster, (void**)&OriginalSpawnMonster)) {
+            WriteLog("Trampoline hook installed successfully!");
         } else {
-            WriteLog("ERROR: Failed to install inline hook");
+            WriteLog("ERROR: Failed to install trampoline hook");
         }
     }
 
