@@ -161,16 +161,18 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
             WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, (DWORD)pTarget);
 
             if (pTarget) {
-                // Принудительно разрешаем чтение, запись и исполнение для целевой области памяти
                 DWORD oldProtect;
                 if (VirtualProtect(pTarget, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                    if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
+                    // Сохраняем статус ошибки MinHook в переменную
+                    MH_STATUS status = MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster));
+                    
+                    if (status == MH_OK) {
                         MH_EnableHook(pTarget);
-                        WriteLog("SpawnMonster hook installed successfully with VirtualProtect!");
+                        WriteLog("SpawnMonster hook installed successfully!");
                     } else {
-                        WriteLog("ERROR: Failed to create hook for SpawnMonster even with VirtualProtect");
+                        // Логируем точный код ошибки MinHook (например: 1, 2, 3 и т.д.)
+                        WriteLog("ERROR: MH_CreateHook failed with status code: %d", status);
                     }
-                    // Возвращаем старые права защиты обратно
                     VirtualProtect(pTarget, 5, oldProtect, &oldProtect);
                 } else {
                     WriteLog("ERROR: Failed to change memory protection at target address");
