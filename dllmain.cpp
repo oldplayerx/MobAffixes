@@ -157,17 +157,23 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     if (MH_Initialize() == MH_OK) {
         HMODULE hD2Game = GetModuleHandleA("D2Game.dll");
         if (hD2Game) {
-            // Безопасное вычисление адреса относительно реального базового адреса загруженной D2Game.dll
             LPVOID pTarget = (LPVOID)((DWORD)hD2Game + 0x51E20);
-
             WriteLog("D2Game base: 0x%X, Target address: 0x%X", (DWORD)hD2Game, (DWORD)pTarget);
 
             if (pTarget) {
-                if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
-                    MH_EnableHook(pTarget);
-                    WriteLog("SpawnMonster hook installed successfully!");
+                // Принудительно разрешаем чтение, запись и исполнение для целевой области памяти
+                DWORD oldProtect;
+                if (VirtualProtect(pTarget, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                    if (MH_CreateHook(pTarget, &DetourD2GameSpawnMonster, reinterpret_cast<LPVOID*>(&OriginalSpawnMonster)) == MH_OK) {
+                        MH_EnableHook(pTarget);
+                        WriteLog("SpawnMonster hook installed successfully with VirtualProtect!");
+                    } else {
+                        WriteLog("ERROR: Failed to create hook for SpawnMonster even with VirtualProtect");
+                    }
+                    // Возвращаем старые права защиты обратно
+                    VirtualProtect(pTarget, 5, oldProtect, &oldProtect);
                 } else {
-                    WriteLog("ERROR: Failed to create hook for SpawnMonster");
+                    WriteLog("ERROR: Failed to change memory protection at target address");
                 }
             }
         }
